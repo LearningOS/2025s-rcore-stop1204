@@ -1,5 +1,11 @@
 [build]
 target = "riscv64gc-unknown-none-elf"
+
+[target.riscv64gc-unknown-none-elf]
+rustflags=[
+#    src/linder.ld
+    "-Clink-arg=-Tsrc/linker.ld", "-Cforce-frame-pointers=yes"
+]
 # to find the platform target
 # rustc --print target-list | grep riscv
 # and then add the target
