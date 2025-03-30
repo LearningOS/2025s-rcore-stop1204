@@ -39,6 +39,20 @@ SECTIONS
     ebss = .;
     ekernel = .;
 
+
+ /* 明确布局调试信息节 */
+    .debug_info : {
+        *(.debug_info)
+    }
+    .debug_abbrev : {
+        *(.debug_abbrev)
+    }
+    .debug_loc : {
+        *(.debug_loc)
+    }
+    /* 可以根据实际情况添加更多调试信息节 */
+
+
     /DISCARD/ : {
         *(.eh_frame)
     }

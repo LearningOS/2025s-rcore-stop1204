@@ -74,7 +74,7 @@ RUN rustup --version && \
     rustc --version
 
 # 3. Build env for labs
-# See os1/Makefile `env:` for example.
+# See os1/Makefile_bak `env:` for example.
 # This avoids having to wait for these steps each time using a new container.
 RUN rustup target add riscv64gc-unknown-none-elf && \
     cargo install cargo-binutils --vers ~0.2 && \

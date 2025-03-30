@@ -1,65 +1,94 @@
-# run cargo build
-# look for the file format
-# look for the file head
-# compile the file to assembly file
-
-DOCKER_NAME ?= rcore-tutorial-v3
-
-FILE := target/riscv64gc-unknown-none-elf/debug/os
+# Building
 TARGET := riscv64gc-unknown-none-elf
-BIOS := bootloader/rustsbi-qemu.bin
+MODE := debug
+KERNEL_ELF := target/$(TARGET)/$(MODE)/os
+KERNEL_BIN := $(KERNEL_ELF).bin
+DISASM_TMP := target/$(TARGET)/$(MODE)/asm
+DOCKER_NAME ?= rcore-tutorial-v3
+CONTAINER_NAME ?= rcore-tutorial-v3
 
 
-b:
-	@cargo build --target $(TARGET)
+# Building mode argument
+ifeq ($(MODE), release)
+	MODE_ARG := --release
+endif
 
-# Rule to run cargo
-run:
-	@cargo run $(FILE)
-format:
-	@file $(FILE)
+# BOARD
+BOARD := qemu
+SBI ?= rustsbi
+BOOTLOADER := ../bootloader/$(SBI)-$(BOARD).bin
 
-h:
-	@rust-readobj -h $(FILE)
-# Rule to run rust-objdump
-d:
-	@rust-objdump -S $(FILE)
+# KERNEL ENTRY
+KERNEL_ENTRY_PA := 0x80200000
 
-bin:
-	@rust-objcopy --binary-architecture=riscv64 $(FILE) \
-		--strip-all -O binary $(FILE).bin
-q:
-	# default memory 128M set by [-m 128M]    range[0x80000000, 0x88000000]
-	# default entry=0x80000000 fixed by Qemu, we can't change it
-	# set bootloader entry addr=0x80000000.
-	# our RustSBI set the next stage entry addr=0x80200000
-	# so we need to set the kernel entry addr=0x80200000
-	@echo "Running QEMU..."
-	@qemu-system-riscv64 -machine virt \
+# Binutils
+OBJDUMP := rust-objdump --arch-name=riscv64
+OBJCOPY := rust-objcopy --binary-architecture=riscv64
+
+# Disassembly
+DISASM ?= -x
+
+build: env $(KERNEL_BIN)
+
+env:
+	(rustup target list | grep "riscv64gc-unknown-none-elf (installed)") || rustup target add $(TARGET)
+	cargo install cargo-binutils
+	rustup component add rust-src
+	rustup component add llvm-tools-preview
+
+$(KERNEL_BIN): kernel
+	@$(OBJCOPY) $(KERNEL_ELF) --strip-all -O binary $@
+
+kernel:
+	@echo Platform: $(BOARD)
+	@cargo build $(MODE_ARG)
+
+clean:
+	@cargo clean
+
+disasm: kernel
+	@$(OBJDUMP) $(DISASM) $(KERNEL_ELF) | less
+
+disasm-vim: kernel
+	@$(OBJDUMP) $(DISASM) $(KERNEL_ELF) > $(DISASM_TMP)
+	@vim $(DISASM_TMP)
+	@rm $(DISASM_TMP)
+
+run: run-inner
+
+run-inner: build
+	@qemu-system-riscv64 \
+		-machine virt \
 		-nographic \
-		-bios $(BIOS) \
-		-device loader,file=$(FILE).bin,addr=0x80200000
-	#qemu-system-riscv64 $(FILE)
-	@echo "QEMU running. Press Ctrl+A, X to exit."
+		-bios $(BOOTLOADER) \
+		-device loader,file=$(KERNEL_BIN),addr=$(KERNEL_ENTRY_PA)
 
-qemu:
-	@qemu-riscv64 $(FILE)
-qemu-version:
-	@qemu-system-riscv64 --version
-	@qemu-riscv64 --version
 
-.PHONY: docker build_docker
 
 docker:
-	docker run --rm -it -v ${PWD}:/mnt -w /mnt ${DOCKER_NAME} bash
+	docker start ${DOCKER_NAME} \
+		&& docker attach ${DOCKER_NAME}
 
-build_docker:
-	docker build -t ${DOCKER_NAME} .
+debug: build
+	@tmux new-session -d \
+		"qemu-system-riscv64 -machine virt -nographic -bios $(BOOTLOADER) -device loader,file=$(KERNEL_BIN),addr=$(KERNEL_ENTRY_PA) -s -S" && \
+		tmux split-window -h "riscv64-unknown-elf-gdb -ex 'file $(KERNEL_ELF)' -ex 'set arch riscv:rv64' -ex 'target remote localhost:1234'" && \
+		tmux -2 attach-session -d
 
-fmt:
-	cd os ; cargo fmt;  cd ..
+h:
+	@rust-readobj -h $(KERNEL_ELF)
+# Rule to run rust-objdump
+d:
+	@rust-objdump -S $(KERNEL_ELF)
 
+bin:
+	@rust-objcopy --binary-architecture=riscv64 $(KERNEL_ELF) \
+		--strip-all -O binary $(KERNEL_BIN)
 
+gdbserver: build
+	@qemu-system-riscv64 -machine virt -nographic -bios $(BOOTLOADER) -device loader,file=$(KERNEL_BIN),addr=$(KERNEL_ENTRY_PA) -s -S
 
-# Default target
-all: b bin format h d
+gdbclient:
+	@riscv64-unknown-elf-gdb -ex 'file $(KERNEL_ELF)' -ex 'set arch riscv:rv64' -ex 'target remote localhost:1234'
+
+.PHONY: build env kernel clean disasm disasm-vim run-inner gdbserver gdbclient

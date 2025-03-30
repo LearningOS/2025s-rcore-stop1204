@@ -1,0 +1,119 @@
+# run cargo build
+# look for the file format
+# look for the file head
+# compile the file to assembly file
+
+DOCKER_NAME ?= rcore-tutorial-v3
+#/Users/terry/.cargo:/root/.cargo
+CARGO_PATH := /Users/terry/.cargo:/root/.cargo
+BOARD := qemu
+SBI ?= rustsbi
+BOOTLOADER := bootloader/$(SBI)-$(BOARD).bin
+
+TARGET := riscv64gc-unknown-none-elf
+MODE := debug
+
+TARGET := riscv64gc-unknown-none-elf
+
+
+OBJDUMP := rust-objdump --arch-name=riscv64
+OBJCOPY := rust-objcopy --binary-architecture=riscv64
+KERNEL_ELF := target/$(TARGET)/$(MODE)/os
+KERNEL_BIN := $(KERNEL_ELF).bin
+DISASM_TMP := target/$(TARGET)/$(MODE)/asm
+
+# KERNEL ENTRY
+KERNEL_ENTRY_PA := 0x80200000
+
+b: $(KERNEL_BIN)
+#	@cargo build --target $(TARGET)
+
+$(KERNEL_BIN): kernel
+	@$(OBJCOPY) $(KERNEL_ELF) --strip-all -O binary $@
+
+# Rule to run cargo
+run:
+	@cargo run $(KERNEL_ELF)
+format:
+	@file $(KERNEL_ELF)
+
+h:
+	@rust-readobj -h $(KERNEL_ELF)
+# Rule to run rust-objdump
+d:
+	@rust-objdump -S $(KERNEL_ELF)
+
+bin:
+	@rust-objcopy --binary-architecture=riscv64 $(KERNEL_ELF) \
+		--strip-all -O binary $(KERNEL_BIN)
+q:
+	# default memory 128M set by [-m 128M]    range[0x80000000, 0x88000000]
+	# default entry=0x80000000 fixed by Qemu, we can't change it
+	# set bootloader entry addr=0x80000000.
+	# our RustSBI set the next stage entry addr=0x80200000
+	# so we need to set the kernel entry addr=0x80200000
+	@echo "Running QEMU..."
+	@qemu-system-riscv64 -machine virt \
+		-nographic \
+		-bios $(BOOTLOADER) \
+		-device loader,file=$(KERNEL_ELF).bin,addr=0x80200000
+	#qemu-system-riscv64 $(FILE)
+	@echo "QEMU running. Press Ctrl+A, X to exit."
+
+qemu:
+	@qemu-riscv64 $(KERNEL_ELF)
+qemu-version:
+	@qemu-system-riscv64 --version
+	@qemu-riscv64 --version
+
+.PHONY: docker build_docker
+
+
+kernel:
+	@echo Platform: $(BOARD)
+	@cargo build $(MODE_ARG)
+
+disasm: kernel
+	@$(OBJDUMP) $(DISASM) $(KERNEL_ELF) | less
+
+disasm-vim: kernel
+	@$(OBJDUMP) $(DISASM) $(KERNEL_ELF) > $(DISASM_TMP)
+	@vim $(DISASM_TMP)
+	@rm $(DISASM_TMP)
+
+docker:
+	docker start ${DOCKER_NAME} \
+		&& docker attach ${DOCKER_NAME}
+
+
+#指定一個名字下次可以使用
+docker_run:
+	docker run  -it -v ${PWD}:/mnt \
+	--name ${DOCKER_NAME} \
+   -w /mnt ${DOCKER_NAME} bash
+#   -v ${CARGO_PATH} \
+
+build_docker:
+	docker build -t ${DOCKER_NAME} .
+
+fmt:
+	cd os ; cargo fmt;  cd ..
+build: env $(KERNEL_BIN)
+	$(KERNEL_BIN): kernel
+	@$(OBJCOPY) $(KERNEL_ELF) --strip-all -O binary $@
+
+debug: build
+	@tmux new-session -d \
+		"qemu-system-riscv64 -machine virt -nographic -bios $(BOOTLOADER) -device loader,file=$(KERNEL_BIN),addr=$(KERNEL_ENTRY_PA) -s -S" && \
+		tmux split-window -h "riscv64-unknown-elf-gdb -ex 'file $(KERNEL_ELF)' -ex 'set arch riscv:rv64' -ex 'target remote localhost:1234'" && \
+		tmux -2 attach-session -d
+
+gdbserver: build
+	@qemu-system-riscv64 -machine virt -nographic -bios $(BOOTLOADER) -device loader,file=$(KERNEL_BIN),addr=$(KERNEL_ENTRY_PA) -s -S
+
+gdbclient:
+	@riscv64-unknown-elf-gdb -ex 'file $(KERNEL_ELF)' -ex 'set arch riscv:rv64' -ex 'target remote localhost:8899'
+
+
+# Default target
+all: b bin format h d
