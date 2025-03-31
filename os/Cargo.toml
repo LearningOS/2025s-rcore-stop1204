@@ -8,3 +8,5 @@ edition = "2024"
 log = "0.4.27"
 [profile.release]
 debug = true
+
+
